@@ -171,7 +171,6 @@ bach2018 <- read.csv("bach2018.csv")
 emp2019 <- read.csv("emp2019.csv")
 amenity_full <- read.csv("amenity_full.csv")
 
-covid_cases <- read.csv("us-counties_covid.csv")
 covid_cases <- covid_cases %>% filter(date == "2020-04-12") %>% select(fips,cases,deaths)
 
 

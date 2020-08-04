@@ -132,7 +132,7 @@ pop <- tbl(coririsi, in_schema("sch_layer", "bea_cainc4_county_69_18")) %>%
   select(fips, dpop07_18, pop_2007, pop_2018) 
 
 density <- dbGetQuery(coririsi_layer, "SELECT geoid, total_population_2018, land_sqmi from attr_county_full") %>%
-  mutate(density = total_population_2018/land_sqmi) %>%
+  mutate(density = total_population_2018/land_sqmi/1000) %>%
   rename(fips = geoid) %>%
   select(fips, density)
 
@@ -208,66 +208,51 @@ df_emp$covid_per_100k[is.na(df_emp$covid_per_100k)] <- 0
 
 final <- final %>% left_join(df_emp, "fips")
 
+
+#################################
+
 fit <- lm(yoy_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
             prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + density +
+            broadband_sub + black2010 + density + density*homes_dpop +
             homes_dpop*land_surface + homes_dpop*log_water + homes_dpop*july_temp + 
             july_temp + land_surface + log_water +
             rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
 
 summ(fit,  digit =5,  cluster = geoid_st)
 
+
+
+
+
+#########################
+
 fit <- lm(yoy_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
             prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + 
+            broadband_sub + black2010 + density +
             july_temp + july_humidity  + land_surface + log_water +
             rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
 
-summ(fit,  digit = 3,  cluster = geoid_st)
+summ(fit,  digit = 5,  cluster = geoid_st)
 
-
+######################################
 
 fit <- lm(emp_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
             prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + 
-            homes_dpop*land_surface + homes_dpop*log_water + homes_dpop*july_temp +
-            july_temp + july_humidity  + land_surface + log_water +
+            broadband_sub + black2010 + density + density*homes_dpop +
+            homes_dpop*land_surface + homes_dpop*log_water + homes_dpop*july_temp + 
+            july_temp + land_surface + log_water +
             rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
 
-summ(fit,  digit = 3,  cluster = geoid_st)
+summ(fit,  digit = 5,  cluster = geoid_st)
+
+######################################
 
 fit <- lm(emp_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
             prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + 
+            broadband_sub + black2010 + density + 
             july_temp + july_humidity  + land_surface + log_water +
             rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
 
-summ(fit,  digit = 3,  cluster = geoid_st)
+summ(fit,  digit = 5,  cluster = geoid_st)
 
-
-summary(ivreg)
-
-rural <- final %>% filter(metro==0)
-
-metro <- final %>% filter(metro==1)
-
-var(metro$emp_change_mo)
-
-var(rural$emp_change_mo)
-
-var(final$emp_change_mo)
-
-winona = filter(final, fips == 27169)
-
-
-tn <- df %>% select(fips, fips_state, area_title, period, employed) %>%
-  pivot_wider(names_from =  period, values_from = employed, names_prefix = "emp.") %>%
-  left_join(metro, "fips") %>%
-  group_by(metro, fips_state) %>%
-  summarize(
-    emp_change = (sum(emp.June2020) - sum(emp.May2020))/sum(emp.May2020) 
-    )  %>% 
-  pivot_wider(names_from =  metro, values_from = emp_change, names_prefix = "metro.") %>%
-  mutate(metro_diff = metro.0 - metro.1)
-
-tc <- final %>% filter(fips == 26055)
+###################################

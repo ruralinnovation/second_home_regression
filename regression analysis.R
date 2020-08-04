@@ -131,7 +131,13 @@ pop <- tbl(coririsi, in_schema("sch_layer", "bea_cainc4_county_69_18")) %>%
   mutate(fips = as.numeric(geoid)) %>%
   select(fips, dpop07_18, pop_2007, pop_2018) 
 
+density <- dbGetQuery(coririsi_layer, "SELECT geoid, total_population_2018, land_sqmi from attr_county_full") %>%
+  mutate(density = total_population_2018/land_sqmi) %>%
+  rename(fips = geoid) %>%
+  select(fips, density)
 
+density$fips <- as.numeric(density$fips)
+ 
 broadband <- tbl(coririsi, in_schema("sch_analysis", "la_counties_broadband")) %>% 
   collect() %>% mutate(broadband = f477_maxad_downup_2018dec_25_3_popsum/pop2018_sum) %>%
   mutate(fips = as.numeric(geoid_co)) %>%
@@ -188,7 +194,8 @@ df_emp <-broadband_sub %>%
   left_join(pop, "fips") %>%
   left_join(covid_cases, "fips") %>%
   left_join(industry, "fips") %>%
-  left_join(amenity_full, "fips")
+  left_join(amenity_full, "fips") %>%
+  left_join(density, "fips")
 
 df_emp <- df_emp %>% left_join(emp.2007, "fips") %>% 
   mutate(demp.2007.2019 = (emp.2019 - emp.2007)/emp.2007)
@@ -203,7 +210,7 @@ final <- final %>% left_join(df_emp, "fips")
 
 fit <- lm(yoy_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
             prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + 
+            broadband_sub + black2010 + density +
             homes_dpop*land_surface + homes_dpop*log_water + homes_dpop*july_temp + 
             july_temp + land_surface + log_water +
             rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)

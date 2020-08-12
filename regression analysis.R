@@ -6,12 +6,21 @@ library(broom)
 library(jtools)
 library(sandwich)
 library(AER)
+library(lmtest)
+library(plm)
+library(Ecdat)
+library(estimatr)
 
+########################################
 
 require("DBI")
 source("../base/connections/coririsi_layer.R")
 
-homes_df <- dbReadTable(coririsi_layer, "second_homes_preiminary_v0_1")
+homes_pop_df <- dbReadTable(coririsi_layer, "second_homes_preiminary_v0_1")
+
+homes_df <- dbGetQuery(coririsi_layer, 'SELECT \"GEOID\", pct_second_home_2018 FROM acs_county') %>%
+  mutate(pct_second_home_2018 = pct_second_home_2018/100)
+
 
 metro <- read.csv("metro.csv")
 
@@ -69,13 +78,16 @@ final <- emp %>% left_join(emp_month, by = c('fips', 'area_title')) %>%
   left_join(yoy_lf, by = c('fips', 'area_title'))
 
 
-homes_df$geoid <- as.numeric(homes_df$geoid)
-homes_df <- homes_df %>% rename(fips = geoid) 
-homes_df <- homes_df %>%
+homes_pop_df$geoid <- as.numeric(homes_pop_df$geoid)
+homes_pop_df<- homes_pop_df %>% rename(fips = geoid) 
+homes_pop_df <- homes_pop_df %>%
   mutate(homes_dpop = (potential_pop - total_population_2018)/total_population_2018) %>%
   select(fips, second_home_2018, potential_pop, homes_dpop)
 
-final <- final %>% left_join(homes_df, "fips") %>% left_join(metro, "fips")
+homes_df$GEOID <- as.numeric(homes_df$GEOID)
+homes_df <- rename(homes_df, fips = GEOID) %>% mutate()
+
+final <- final %>% left_join(homes_pop_df, "fips") %>% left_join(homes_df, "fips") %>% left_join(metro, "fips")
 
 
 
@@ -93,8 +105,18 @@ source("../base/connections/coririsi.R")
 
 source("../base/functions/write_layer.R")
 
+
 index <- tbl(coririsi, in_schema("sch_layer", "county_resilience_score_v1")) %>% 
   collect()
+
+
+covid <- tbl(coririsi, in_schema("sch_layer", "covid_19_county_by_month_wide ")) %>%
+  collect() %>%
+  rename(fips = geoid) %>%
+  mutate(covid_cases = confirmed_03 + confirmed_04 + confirmed_05) %>%
+  select(fips, covid_cases)
+
+covid$fips <- as.numeric(covid$fips)
 
 
 industry =dbReadTable(coririsi_layer, "lodes_county_2017") %>%
@@ -107,7 +129,7 @@ industry =dbReadTable(coririsi_layer, "lodes_county_2017") %>%
   select(fips, rec, accom, manu, admin_waste, prof_services)
 
 industry$fips <- as.numeric(industry$fips)
-  
+
 prop <- tbl(coririsi, in_schema("sch_layer", "bea_caemp25n_county_01_18")) %>% 
   collect() %>% 
   select(geoid, geoid_st, year, prop_emp, total_emp) %>% 
@@ -137,7 +159,7 @@ density <- dbGetQuery(coririsi_layer, "SELECT geoid, total_population_2018, land
   select(fips, density)
 
 density$fips <- as.numeric(density$fips)
- 
+
 broadband <- tbl(coririsi, in_schema("sch_analysis", "la_counties_broadband")) %>% 
   collect() %>% mutate(broadband = f477_maxad_downup_2018dec_25_3_popsum/pop2018_sum) %>%
   mutate(fips = as.numeric(geoid_co)) %>%
@@ -168,7 +190,14 @@ hispanic2010 <- tbl(coririsi, in_schema("sch_source", "ers_people")) %>%
   select(fips, hispanic2010) 
 
 
-covid_cases <- read.csv("us-counties_covid.csv")
+library(devtools)
+install_github("yonghah/esri2sf")
+library("esri2sf")
+url <- "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/ArcGIS/rest/services/ncov_cases/FeatureServer/2"
+ncov_cases <- esri2sf(url)
+
+
+
 emp.2007 <- read.csv("2007 emp.csv")
 metro <- read.csv("metro.csv")
 broadband_sub <- read.csv("broadband_sub.csv")
@@ -176,8 +205,10 @@ bach2010 <- read.csv("bach2010.csv")
 bach2018 <- read.csv("bach2018.csv")
 emp2019 <- read.csv("emp2019.csv")
 amenity_full <- read.csv("amenity_full.csv")
+zillow <- read.csv("zillow.csv")
+#covid_cases <- read.csv(us-counties_covid.csv)
 
-covid_cases <- covid_cases %>% filter(date == "2020-04-12") %>% select(fips,cases,deaths)
+#covid_cases <- covid_cases %>% filter(date == "2020-04-12") %>% select(fips,cases,deaths)
 
 
 df_emp <-broadband_sub %>% 
@@ -192,67 +223,283 @@ df_emp <-broadband_sub %>%
   left_join(black2010, "fips") %>%
   left_join(hispanic2010, "fips") %>%
   left_join(pop, "fips") %>%
-  left_join(covid_cases, "fips") %>%
+  left_join(covid, "fips") %>%
   left_join(industry, "fips") %>%
   left_join(amenity_full, "fips") %>%
-  left_join(density, "fips")
+  left_join(density, "fips") %>%
+  left_join(zillow, "fips")
 
 df_emp <- df_emp %>% left_join(emp.2007, "fips") %>% 
   mutate(demp.2007.2019 = (emp.2019 - emp.2007)/emp.2007)
 df_emp <- df_emp %>%
   mutate(demp.2007.Apr20 = (emp.Apr2020 - emp.2007)/emp.2007)
-df_emp <- df_emp %>% mutate(covid_per_100k = cases/(pop_2018/100000))
+df_emp <- df_emp %>% mutate(covid_per_100k = covid_cases/(pop_2018/100000))
 df_emp$covid_per_100k[is.na(df_emp$covid_per_100k)] <- 0
+
+
+df_emp <- df_emp %>% 
+  mutate(house.Feb.June = (house.June2020 - house.Feb2020)/house.Feb2020) %>%
+  mutate(house.YoY.June = (house.June2020 - house.June2019)/house.June2019)
 
 ################################
 
 final <- final %>% left_join(df_emp, "fips")
 
 
-#################################
+######### YoY LF w/Interactions ###################
 
-fit <- lm(yoy_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
-            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + density + density*homes_dpop +
-            homes_dpop*land_surface + homes_dpop*log_water + homes_dpop*july_temp + 
+fit <- lm(yoy_lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
             july_temp + land_surface + log_water +
-            rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
 
-summ(fit,  digit =5,  cluster = geoid_st)
-
-
+summ(fit,  digit =5)
 
 
-
-#########################
-
-fit <- lm(yoy_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
-            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + density +
-            july_temp + july_humidity  + land_surface + log_water +
-            rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
-
-summ(fit,  digit = 5,  cluster = geoid_st)
-
-######################################
-
-fit <- lm(emp_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
-            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + density + density*homes_dpop +
-            homes_dpop*land_surface + homes_dpop*log_water + homes_dpop*july_temp + 
+fit <- lm(yoy_lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
             july_temp + land_surface + log_water +
-            rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==0),  data = final)
 
-summ(fit,  digit = 5,  cluster = geoid_st)
+summ(fit,  digit =5)
 
-######################################
 
-fit <- lm(emp_change ~ homes_dpop + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
-            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less + 
-            broadband_sub + black2010 + density + 
-            july_temp + july_humidity  + land_surface + log_water +
-            rec + accom + manu + admin_waste + prof_services + geoid_st, data = final)
+fit <- lm(yoy_lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==1),  data = final)
 
-summ(fit,  digit = 5,  cluster = geoid_st)
+summ(fit,  digit =5)
 
-###################################
+
+######### YoY LF ###################
+
+fit <- lm(yoy_lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(yoy_lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  subset = (metro ==0), data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(yoy_lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset = (metro ==1), data = final)
+
+summ(fit,  digit =5)
+
+
+
+
+######### Feb - June LF w/Interactions ###################
+
+fit <- lm(lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==0),  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==1),  data = final)
+
+summ(fit,  digit =5)
+
+
+######### Feb - June LF ###################
+
+fit <- lm(lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  subset = (metro ==0), data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(lf_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset = (metro ==1), data = final)
+
+summ(fit,  digit =5)
+
+
+
+######### YoY Emp  w/Interactions ###################
+
+fit <- lm(yoy_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(yoy_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==0),  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(yoy_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==1),  data = final)
+
+summ(fit,  digit =5)
+
+######### YoY Emp  ###################
+
+fit <- lm(yoy_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(yoy_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==0),  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(yoy_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==1),  data = final)
+
+summ(fit,  digit =5)
+
+######### Feb - June Emp w/Interactions ###################
+
+fit <- lm(emp_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(emp_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==0),  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(emp_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            rec*pct_second_home_2018 + accom*pct_second_home_2018 +  metro*pct_second_home_2018 +
+            pct_second_home_2018*land_surface + pct_second_home_2018*log_water +  pct_second_home_2018*july_temp + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset=(metro==1),  data = final)
+
+summ(fit,  digit =5)
+
+
+######### Feb - June Emp ###################
+
+fit <- lm(emp_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(emp_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st,  subset = (metro ==0), data = final)
+
+summ(fit,  digit =5)
+
+
+fit <- lm(emp_change ~ pct_second_home_2018 + covid_per_100k + demp.2007.2019 + log(pop_2018) + dpop07_18 +   
+            prop_share_18 + bach2018_share + metro + share_young_firm_10yr_less +
+            broadband + broadband_sub + black2010 + density + 
+            july_temp + land_surface + log_water +
+            rec + accom + manu + admin_waste + prof_services + geoid_st, subset = (metro ==1), data = final)
+
+summ(fit,  digit =5)
+
+
